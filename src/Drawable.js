@@ -208,6 +208,50 @@ class Drawable {
     }
 
     /**
+     * Returns whether this Drawable needs to be re-transformed before viewport culling.
+     * @returns {boolean} if the drawable needs to be transformed before viewport culling.
+     */
+    needsTransformBeforeCulling () {
+        return this._rotationCenterDirty || this._skinScaleDirty;
+    }
+    
+    /**
+     * Check if the drawable is in the viewport.
+     * @param {number} halfNativeWidth Half width of the viewport.
+     * @param {number} halfNativeHeight Half height of the viewport.
+     * @returns {boolean} Whether the drawable is in the viewport.
+     */
+    isInViewport (halfNativeWidth, halfNativeHeight) {
+        // Position of the texture
+        const positionX = Math.trunc(this._position[0] + 0.5 - this._rotationAdjusted[0]);
+        const positionY = Math.trunc(this._position[1] + 0.5 - this._rotationAdjusted[1]);
+        // Half of the texture size
+        const halfWidth = Math.trunc((this._skinScale[0] / 2) + 0.5);
+        const halfHeight = Math.trunc((this._skinScale[1] / 2) + 0.5);
+
+        // The leftTop and rightBottomX of the sprite must be enlarged,
+        // otherwise there will be problems when rotating.
+        const maxHalfSize = Math.max(halfWidth, halfHeight);
+
+        const leftTopX = positionX - halfWidth - maxHalfSize;
+
+        // Y-axis is reversed
+        const leftTopY = positionY + halfHeight + maxHalfSize;
+
+        const rightBottomX = positionX + halfWidth + maxHalfSize;
+
+        // Y-axis is reversed
+        const rightBottomY = positionY - halfHeight - maxHalfSize;
+
+        return !(
+            rightBottomX < -halfNativeWidth ||
+            rightBottomY > halfNativeHeight ||
+            leftTopX > halfNativeWidth ||
+            leftTopY < -halfNativeHeight
+        );
+    }
+
+    /**
      * Update the position if it is different. Marks the transform as dirty.
      * @param {Array.<number>} position A new position.
      */
