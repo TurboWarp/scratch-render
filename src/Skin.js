@@ -59,6 +59,10 @@ class Skin {
      * Dispose of this object. Do not use it after calling this method.
      */
     dispose () {
+        if (this._emptyImageTexture) {
+            this._renderer.gl.deleteTexture(this._emptyImageTexture);
+            this._emptyImageTexture = null;
+        }
         this._id = RenderConstants.ID_NONE;
     }
 
