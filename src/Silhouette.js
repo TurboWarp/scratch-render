@@ -175,7 +175,7 @@ class Silhouette {
             const canvas = Silhouette._updateCanvas();
             canvas.width = width;
             canvas.height = height;
-            const ctx = canvas.getContext('2d');
+            const ctx = canvas.getContext('2d', {willReadFrequently: true});
 
             ctx.clearRect(0, 0, width, height);
             ctx.drawImage(this._lazyData, 0, 0, width, height);
