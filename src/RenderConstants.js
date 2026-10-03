@@ -32,6 +32,13 @@ module.exports = {
          * @type {object}
          * @property {Array<int>} newSize - the new size of the renderer
          */
-        NativeSizeChanged: 'NativeSizeChanged'
+        NativeSizeChanged: 'NativeSizeChanged',
+
+        /**
+         * Event emitted when the WebGL context is lost.
+         *
+         * @event RenderWebGL#event:ContextLost
+         */
+        ContextLost: 'ContextLost'
     }
 };

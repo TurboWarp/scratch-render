@@ -271,6 +271,10 @@ class RenderWebGL extends EventEmitter {
 
         this.on(RenderConstants.Events.NativeSizeChanged, this.onNativeSizeChanged);
 
+        gl.canvas.addEventListener('webglcontextlost', () => {
+            this.emit(RenderConstants.Events.ContextLost);
+        });
+
         this.setBackgroundColor(1, 1, 1);
         this.setStageSize(xLeft || -240, xRight || 240, yBottom || -180, yTop || 180);
         this.resize(this._nativeSize[0], this._nativeSize[1]);
