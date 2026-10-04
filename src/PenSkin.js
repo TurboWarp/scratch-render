@@ -66,6 +66,16 @@ class PenSkin extends Skin {
             exit: () => this._exitUsePenBuffer()
         };
 
+        /** @type {object} */
+        this._stampDrawRegionId = {
+            enter: () => this._enterUsePenBuffer(),
+            // Leave the pen framebuffer bound when a run of stamps ends, like penStamp always has.
+            // Unbinding it here makes Chrome split the pen layer into separate render passes when
+            // stamps and pen lines alternate, which is much slower. Everything that draws to another
+            // framebuffer binds it explicitly.
+            exit: () => {}
+        };
+
         /** @type {WebGLRenderingContext} */
         const gl = this._renderer.gl;
 
@@ -227,11 +237,42 @@ class PenSkin extends Skin {
         const diameter = penAttributes.diameter || DefaultPenAttributes.diameter;
         const offset = (diameter === 1 || diameter === 3) ? 0.5 : 0;
 
-        this._drawLineOnBuffer(
-            penAttributes,
-            x0 + offset, y0 + offset,
-            x1 + offset, y1 + offset
-        );
+        const index = this.attribute_index;
+        if (
+            this._renderer._regionId === this._lineOnBufferDrawRegionId &&
+            this.instancedRendering &&
+            index + PEN_ATTRIBUTE_STRIDE <= PEN_ATTRIBUTE_BUFFER_SIZE
+        ) {
+            // Fast path for the common case of another line in a run of lines: the line region is
+            // already entered and the buffer has room, so _drawLineOnBuffer would neither enter the
+            // region nor flush. This writes the same values computed by the same float operations,
+            // and is kept small so that V8 can inline it into its callers.
+            const quality = this.renderQuality;
+            const data = this.attribute_data;
+            const color = penAttributes.color4f || DefaultPenAttributes.color4f;
+            const alpha = color[3];
+            x0 = (x0 + offset) * quality;
+            y0 = (y0 + offset) * quality;
+            const dx = ((x1 + offset) * quality) - x0;
+            const dy = ((y1 + offset) * quality) - y0;
+            data[index] = color[0] * alpha;
+            data[index + 1] = color[1] * alpha;
+            data[index + 2] = color[2] * alpha;
+            data[index + 3] = alpha;
+            data[index + 4] = diameter * quality;
+            data[index + 5] = Math.sqrt((dx * dx) + (dy * dy));
+            data[index + 6] = x0;
+            data[index + 7] = -y0;
+            data[index + 8] = dx;
+            data[index + 9] = -dy;
+            this.attribute_index = index + PEN_ATTRIBUTE_STRIDE;
+        } else {
+            this._drawLineOnBuffer(
+                penAttributes,
+                x0 + offset, y0 + offset,
+                x1 + offset, y1 + offset
+            );
+        }
 
         this._silhouetteDirty = true;
     }
@@ -272,9 +313,9 @@ class PenSkin extends Skin {
             this._flushLines();
         }
 
-        const gl = this._renderer.gl;
-
-        twgl.bindFramebufferInfo(gl, null);
+        // Leave the pen framebuffer bound. Switching to the default framebuffer and back (for example
+        // when lines and stamps alternate) makes Chrome split the pen layer into separate render passes,
+        // which is much slower. Everything that draws to another framebuffer binds it explicitly.
     }
 
     /**
@@ -285,11 +326,9 @@ class PenSkin extends Skin {
     }
 
     /**
-     * Return to a base state
+     * Return to a base state. The pen framebuffer stays bound; see _exitDrawLineOnBuffer.
      */
-    _exitUsePenBuffer () {
-        twgl.bindFramebufferInfo(this._renderer.gl, null);
-    }
+    _exitUsePenBuffer () {}
 
     // tw: draw region used to preserve texture when resizing
     _enterDrawTexture () {
@@ -408,7 +447,15 @@ class PenSkin extends Skin {
         const gl = this._renderer.gl;
 
         gl.bindBuffer(gl.ARRAY_BUFFER, this.attribute_glbuffer);
-        gl.bufferSubData(gl.ARRAY_BUFFER, 0, new Float32Array(this.attribute_data.buffer, 0, this.attribute_index));
+        // Replace the buffer's storage instead of updating it in place with bufferSubData. The previous batch
+        // of lines may still be waiting to be drawn by the GPU, and updating a buffer that is in use is slow
+        // (ANGLE's Metal backend, used by Chrome on macOS, has to synchronize or copy for it); with new
+        // storage, the driver does not have to wait for the earlier draw.
+        gl.bufferData(
+            gl.ARRAY_BUFFER,
+            new Float32Array(this.attribute_data.buffer, 0, this.attribute_index),
+            gl.STREAM_DRAW
+        );
 
         gl.enableVertexAttribArray(this.a_lineColor_loc);
         gl.vertexAttribPointer(
