@@ -227,6 +227,15 @@ class RenderWebGL extends EventEmitter {
         /** @type {function} */
         this._exitRegion = null;
 
+        /**
+         * The shader used by the previous stamp in the current stamp draw region, if any.
+         * @type {?ProgramInfo}
+         */
+        this._stampShader = null;
+
+        /** @type {module:twgl/m4.Mat4} */
+        this._stampProjection = twgl.m4.identity();
+
         /** @type {object} */
         this._backgroundDrawRegionId = {
             enter: () => this._enterDrawBackground(),
@@ -1934,12 +1943,18 @@ class RenderWebGL extends EventEmitter {
             return;
         }
 
-        this._doExitDrawRegion();
-
         const skin = /** @type {PenSkin} */ this._allSkins[penSkinID];
 
+        // Consecutive stamps onto the same pen layer stay inside one draw region so that the pen
+        // framebuffer, shader program, and vertex attributes are only set up once per run of stamps.
+        // Anything else that needs different GL state (pen lines, clears, touching queries, drawing
+        // the stage) enters its own region or calls _doExitDrawRegion(), which ends the run.
+        if (this._regionId !== skin._stampDrawRegionId) {
+            this.enterDrawRegion(skin._stampDrawRegionId);
+            this._stampShader = null;
+        }
+
         const gl = this._gl;
-        twgl.bindFramebufferInfo(gl, skin._framebuffer);
 
         // Limit size of viewport to the bounds around the stamp Drawable and create the projection matrix for the draw.
         // TW: We upscale the "stage space" to "screen space" and then snap the coordinates so that tiled projects
@@ -1963,17 +1978,62 @@ class RenderWebGL extends EventEmitter {
             bounds.top / quality,
             bounds.bottom / quality,
             -1,
-            1
+            1,
+            this._stampProjection
         );
 
         // Draw the stamped sprite onto the PenSkin's framebuffer.
-        this._drawThese([stampID], ShaderManager.DRAW_MODE.default, projection, {
-            ignoreVisibility: true,
-            framebufferWidth: this._nativeSize[0] * quality,
-            framebufferHeight: this._nativeSize[1] * quality
-        });
+        this._drawStamp(stampDrawable, projection, this._nativeSize[0] * quality, this._nativeSize[1] * quality);
         skin._silhouetteDirty = true;
         this.dirty = true;
+    }
+
+    /**
+     * Draw a single Drawable for penStamp. Equivalent to calling _drawThese() with ignoreVisibility and
+     * the given framebuffer size, except that the shader program and vertex attributes are kept from the
+     * previous stamp in the same stamp draw region when possible.
+     * @param {Drawable} drawable The Drawable to stamp.
+     * @param {module:twgl/m4.Mat4} projection The projection matrix to use.
+     * @param {int} framebufferWidth The width of the framebuffer being drawn onto.
+     * @param {int} framebufferHeight The height of the framebuffer being drawn onto.
+     * @private
+     */
+    _drawStamp (drawable, projection, framebufferWidth, framebufferHeight) {
+        const gl = this._gl;
+
+        const drawableScale = (
+            framebufferWidth !== this._nativeSize[0] && framebufferHeight !== this._nativeSize[1]
+        ) ? [
+                drawable.scale[0] * framebufferWidth / this._nativeSize[0],
+                drawable.scale[1] * framebufferHeight / this._nativeSize[1]
+            ] : drawable.scale;
+
+        if (!drawable.skin.getTexture(drawableScale)) return;
+
+        const shader = this._shaderManager.getShader(ShaderManager.DRAW_MODE.default, drawable.enabledEffects);
+        if (this._stampShader !== shader) {
+            this._stampShader = shader;
+            gl.useProgram(shader.program);
+            twgl.setBuffersAndAttributes(gl, shader, this._bufferInfo);
+        }
+
+        const uniforms = {
+            u_projectionMatrix: projection
+        };
+        Object.assign(uniforms,
+            drawable.skin.getUniforms(drawableScale),
+            drawable.getUniforms());
+
+        if (uniforms.u_skin) {
+            twgl.setTextureParameters(
+                gl, uniforms.u_skin, {
+                    minMag: drawable.skin.useNearest(drawableScale, drawable) ? gl.NEAREST : gl.LINEAR
+                }
+            );
+        }
+
+        twgl.setUniforms(shader, uniforms);
+        twgl.drawBufferInfo(gl, this._bufferInfo, gl.TRIANGLES);
     }
 
     /* ******
@@ -2022,6 +2082,10 @@ class RenderWebGL extends EventEmitter {
     onNativeSizeChanged (event) {
         this.dirty = true;
         const [width, height] = event.newSize;
+
+        // Resizing framebuffers below changes the framebuffer binding, so leave any region that
+        // expects one to stay bound (such as a run of pen stamps).
+        this._doExitDrawRegion();
 
         const gl = this._gl;
         const attachments = [
