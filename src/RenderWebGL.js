@@ -832,9 +832,24 @@ class RenderWebGL extends EventEmitter {
         if (index < endIndex) {
             this._drawList.splice(index, 1);
             this._updateOffsets('delete', currentLayerGroup.groupIndex);
-        } else {
-            log.warn('Could not destroy drawable that could not be found in layer group.');
             return;
+        }
+
+        // Certain custom extensions, such as SharkPool Layer Control, thoroughly corrupt internal state
+        // by rearranging drawables outside the layer they ought to belong to. This breaks a lot of things
+        // in various ways. One of the things it breaks is the loop above where we try to find the drawable
+        // by checking where its layer starts and ends. The impact of this corruption is severe enough that
+        // it's best if we work around it.
+        index = this._drawList.indexOf(drawableID);
+        if (index === -1) {
+            log.warn('Could not destroy drawable that could not be found in draw list.');
+            return;
+        }
+        this._drawList.splice(index, 1);
+        for (const groupName of this._groupOrdering) {
+            if (this._layerGroups[groupName].drawListOffset > index) {
+                this._layerGroups[groupName].drawListOffset--;
+            }
         }
     }
 
