@@ -37,6 +37,8 @@ const FUNCTIONS = ['rgb', 'rgba', 'matrix', 'translate', 'scale', 'rotate'];
 
 const any = () => true;
 const isNumber = value => NUMBER.test(value);
+// The paint editor sometimes writes these. Browsers ignore them, the same way in an atlas as on their own.
+const isNumberOrIgnored = value => isNumber(value) || value === 'NaN' || value === 'none';
 const isPlain = value => {
     if (!PLAIN.test(value)) return false;
     const calls = value.match(/[\w-]+\s*\(/g) || [];
@@ -47,10 +49,10 @@ const GROUP_ATTRIBUTES = {
     'fill': isPlain,
     'stroke': isPlain,
     'fill-rule': isPlain,
-    'stroke-width': isNumber,
+    'stroke-width': isNumberOrIgnored,
     'stroke-linecap': isPlain,
     'stroke-linejoin': isPlain,
-    'stroke-miterlimit': isNumber,
+    'stroke-miterlimit': isNumberOrIgnored,
     'stroke-dasharray': value => NUMBER_LIST.test(value),
     'stroke-dashoffset': isNumber,
     'opacity': isNumber,
@@ -64,7 +66,7 @@ const GROUP_ATTRIBUTES = {
     'text-anchor': any,
     // Paint editor metadata.
     'data-paper-data': any,
-    'style': value => value.trim() === 'mix-blend-mode: normal'
+    'style': value => /^mix-blend-mode: normal;?$/.test(value.trim())
 };
 const ELEMENTS = {
     g: GROUP_ATTRIBUTES,

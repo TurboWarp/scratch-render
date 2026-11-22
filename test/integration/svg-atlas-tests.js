@@ -42,7 +42,12 @@ const gradient = `<svg xmlns="http://www.w3.org/2000/svg" width="40" height="40"
         simple(60, 40, '#ff0000'),
         simple(90, 120, '#00ff00'),
         simple(33.27, 71.5, '#0000ff'),
-        gradient
+        gradient,
+        // Values the paint editor sometimes writes, which browsers ignore.
+        simple(50, 50, '#ffff00')
+            .replace('stroke-width="2"', 'stroke-width="NaN"')
+            .replace('stroke-miterlimit="10"', 'stroke-miterlimit="none"')
+            .replace('style="mix-blend-mode: normal"', 'style="mix-blend-mode: normal;"')
     ];
 
     await test('costumes created during the same task are drawn from an atlas', async t => {
@@ -83,7 +88,7 @@ const gradient = `<svg xmlns="http://www.w3.org/2000/svg" width="40" height="40"
 
         t.same(result.sizesBeforeEnd, result.standaloneMeta.map(m => m[0]), 'sizes are available right away');
         t.notOk(result.loadedBeforeEnd, 'nothing loads before the task ends');
-        t.same(result.inAtlas, [true, true, true, false], 'only simple costumes use the atlas');
+        t.same(result.inAtlas, [true, true, true, false, true], 'only simple costumes use the atlas');
         t.same(result.batchedMeta, result.standaloneMeta, 'same sizes and rotation centers');
         for (const {costume, scale, total, differing, opacityFlips} of result.pixels) {
             if (costume === 2) {
