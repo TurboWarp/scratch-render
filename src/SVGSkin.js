@@ -199,7 +199,6 @@ class SVGSkin extends Skin {
      */
     setSVG (svgData, rotationCenter) {
         const svgTag = loadSvgString(svgData);
-        const svgText = serializeSvgToString(svgTag, this._renderer.customFonts);
         this._svgImageLoaded = false;
 
         const {x, y, width, height} = svgTag.viewBox.baseVal;
@@ -211,13 +210,19 @@ class SVGSkin extends Skin {
         this._size[0] = width;
         this._size[1] = height;
 
+        // It will be an empty image so let's fastpath this.
+        if (width === 0 || height === 0) {
+            this._svgImage.onload = null;
+            this._svgImage.removeAttribute('src');
+            this.resetMIPs();
+            super.setEmptyImageData();
+            return;
+        }
+
+        const svgText = serializeSvgToString(svgTag, this._renderer.customFonts);
+
         // If there is another load already in progress, replace the old onload to effectively cancel the old load
         this._svgImage.onload = () => {
-            if (width === 0 || height === 0) {
-                super.setEmptyImageData();
-                return;
-            }
-
             const maxDimension = Math.ceil(Math.max(width, height));
             const rendererMax = this._renderer.maxTextureDimension;
             let testScale = 2;
