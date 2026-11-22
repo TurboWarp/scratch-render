@@ -12,6 +12,7 @@ const PenSkin = require('./PenSkin');
 const RenderConstants = require('./RenderConstants');
 const ShaderManager = require('./ShaderManager');
 const SVGSkin = require('./SVGSkin');
+const {SVGAtlasBuilder} = require('./SVGAtlas');
 const TextBubbleSkin = require('./TextBubbleSkin');
 const EffectTransform = require('./EffectTransform');
 const CanvasMeasurementProvider = require('./util/canvas-measurement-provider');
@@ -314,6 +315,20 @@ class RenderWebGL extends EventEmitter {
         this._customFontStyles = null;
 
         /**
+         * Whether eligible SVGs may be combined into atlases.
+         * This is relevant for Chrome where it is a major performance benefit.
+         * On Firefox, this can be 20% slower, so we should avoid it there.
+         * @type {boolean}
+         */
+        this.useSVGAtlas = typeof navigator === 'object' && /Chrome\//.test(navigator.userAgent);
+
+        /**
+         * Collects the SVG costumes created during the current task. See _getSVGAtlasBuilder.
+         * @type {SVGAtlasBuilder|null}
+         */
+        this._svgAtlasBuilder = null;
+
+        /**
          * Export internals for third-party extensions.
          */
         this.exports = {
@@ -364,6 +379,24 @@ class RenderWebGL extends EventEmitter {
     setPrivateSkinAccess (allowPrivateSkinAccess) {
         this.allowPrivateSkinAccess = allowPrivateSkinAccess;
         this.emit(RenderConstants.Events.AllowPrivateSkinAccessChanged, allowPrivateSkinAccess);
+    }
+
+    /**
+     * SVG costumes created during the same task go into the same atlases. Projects and sprites create their
+     * costumes in bursts as their assets arrive, so this batches them without knowing when a load starts or ends.
+     * @returns {SVGAtlasBuilder|null} The builder for this task, or null if atlases are disabled.
+     */
+    _getSVGAtlasBuilder () {
+        if (!this.useSVGAtlas) return null;
+        if (!this._svgAtlasBuilder) {
+            const builder = new SVGAtlasBuilder();
+            this._svgAtlasBuilder = builder;
+            setTimeout(() => {
+                this._svgAtlasBuilder = null;
+                builder.flush();
+            });
+        }
+        return this._svgAtlasBuilder;
     }
 
     /**
@@ -585,7 +618,7 @@ class RenderWebGL extends EventEmitter {
     createSVGSkin (svgData, rotationCenter) {
         const skinId = this._nextSkinId++;
         const newSkin = new SVGSkin(skinId, this);
-        newSkin.setSVG(svgData, rotationCenter);
+        newSkin.setSVG(svgData, rotationCenter, this._getSVGAtlasBuilder());
         this._allSkins[skinId] = newSkin;
         return skinId;
     }

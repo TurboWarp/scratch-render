@@ -3,6 +3,7 @@ const twgl = require('twgl.js');
 const Skin = require('./Skin');
 const {loadSvgString, serializeSvgToString} = require('@turbowarp/scratch-svg-renderer');
 const ShaderManager = require('./ShaderManager');
+const {isAtlasable} = require('./SVGAtlas');
 
 /**
  * All scaled renderings of the SVG are stored in an array. The 1.0 scale of
@@ -49,6 +50,12 @@ class SVGSkin extends Skin {
         * @type {Number}
         */
         this._maxTextureScale = 1;
+
+        /**
+         * Where this costume is in an SVG atlas, if it is drawn from one. See SVGAtlas.js.
+         * @type {object|null}
+         */
+        this._atlasEntry = null;
     }
 
     /**
@@ -57,6 +64,7 @@ class SVGSkin extends Skin {
     dispose () {
         this.resetMIPs();
         this._svgImage.onload = null;
+        this._detachFromAtlas();
         super.dispose();
     }
 
@@ -122,12 +130,23 @@ class SVGSkin extends Skin {
             // pre-scaling; e.g. if an image has a width of 0.4 and is being rendered at 3x scale, the canvas will have
             // a width of 1, but the image's width will be rounded down to 0 on some browsers (Firefox) prior to being
             // drawn at that scale, resulting in an IndexSizeError if we attempt to draw it.
-            this._svgImage.naturalWidth <= 0 ||
-            this._svgImage.naturalHeight <= 0
+            (!this._atlasEntry && (this._svgImage.naturalWidth <= 0 || this._svgImage.naturalHeight <= 0))
         ) return super.getTexture();
         this._context.clearRect(0, 0, this._canvas.width, this._canvas.height);
         this._context.setTransform(scale, 0, 0, scale, 0, 0);
-        this._context.drawImage(this._svgImage, 0, 0);
+        if (this._atlasEntry) {
+            // Copy our tile out of the atlas. It starts on a whole pixel, so the offset cancels out exactly.
+            const entry = this._atlasEntry;
+            const tileWidth = this._canvas.width / scale;
+            const tileHeight = this._canvas.height / scale;
+            this._context.drawImage(
+                entry.atlas.image,
+                entry.x, entry.y, tileWidth, tileHeight,
+                0, 0, tileWidth, tileHeight
+            );
+        } else {
+            this._context.drawImage(this._svgImage, 0, 0);
+        }
 
         // TW: Reading image data from <canvas> is very slow and causes animations to stutter,
         // so we just use the canvas directly instead.
@@ -195,12 +214,18 @@ class SVGSkin extends Skin {
      * @param {string} svgData - new SVG to use.
      * @param {Array<number>} [rotationCenter] - Optional rotation center for the SVG. If not supplied, it will be
      * calculated from the bounding box
+     * @param {SVGAtlasBuilder} [atlasBuilder] - Internal. Gathers costumes into atlases.
      * @fires Skin.event:WasAltered
      */
-    setSVG (svgData, rotationCenter) {
+    setSVG (svgData, rotationCenter, atlasBuilder) {
         const svgTag = loadSvgString(svgData);
-        const svgText = serializeSvgToString(svgTag, this._renderer.customFonts);
+        // Simple costumes are gathered into atlases. They have no text, so they
+        // don't need fonts.
+        const useAtlas = atlasBuilder && isAtlasable(svgTag);
+        const svgText = serializeSvgToString(svgTag, useAtlas ? null : this._renderer.customFonts);
         this._svgImageLoaded = false;
+        // The old costume no longer needs its atlas.
+        this._detachFromAtlas();
 
         const {x, y, width, height} = svgTag.viewBox.baseVal;
         // While we're setting the size before the image is loaded, this doesn't cause the skin to appear with the wrong
@@ -211,8 +236,7 @@ class SVGSkin extends Skin {
         this._size[0] = width;
         this._size[1] = height;
 
-        // If there is another load already in progress, replace the old onload to effectively cancel the old load
-        this._svgImage.onload = () => {
+        const onLoad = () => {
             if (width === 0 || height === 0) {
                 super.setEmptyImageData();
                 return;
@@ -238,7 +262,40 @@ class SVGSkin extends Skin {
             this.emitWasAltered();
         };
 
+        if (useAtlas) {
+            // Cancel any load in progress and let go of the old image.
+            this._svgImage.onload = null;
+            this._svgImage.removeAttribute('src');
+            atlasBuilder.add(this, svgText, width, height, onLoad);
+        } else {
+            this._loadStandalone(svgText, onLoad);
+        }
+    }
+
+    /**
+     * Load an SVG as its own image.
+     * @param {string} svgText - Serialized SVG.
+     * @param {function} onLoad - Called when it has loaded.
+     */
+    _loadStandalone (svgText, onLoad) {
+        // If there is another load already in progress, replace the old onload to effectively cancel the old load
+        this._svgImage.onload = onLoad;
         this._svgImage.src = `data:image/svg+xml;utf8,${encodeURIComponent(svgText)}`;
+    }
+
+    /**
+     * Stop using an atlas, or stop waiting to be put into one.
+     */
+    _detachFromAtlas () {
+        const entry = this._atlasEntry;
+        if (entry) {
+            this._atlasEntry = null;
+            if (entry.atlas) {
+                entry.atlas.release(entry);
+            } else {
+                entry.builder.remove(entry);
+            }
+        }
     }
 
 }
